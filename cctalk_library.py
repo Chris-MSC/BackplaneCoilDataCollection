@@ -1,8 +1,8 @@
 import serial
 
-# Communication Connection
-def comms(port, baud, timeout):
-    try:
+
+def comms(port, baud, timeout):             # Serial Communication with VAL364
+    try:                                        
         ser=serial.Serial(port, baud, timeout=timeout)
         print("Connected")
         return(ser)
@@ -12,123 +12,131 @@ def comms(port, baud, timeout):
         return(1)
 
 
-class ccTalk_read():
-    def __init__(self, msg):
-        self.msg = msg
-        self.decimal = self.hex_convert()       
-        self.message = self.msg_check()
+class ccTalk_read():                        # Checking slave data
+    '''
+    This class takes recieved data from a slave device,
+    cleans the data into a readable decimal format,
+    and after checking the validity of the message,
+    will return the recived message information.
+    '''
+    def __init__(self, msg):                    # Initialization
+        self.msg = msg                              # This data variable should always be a byte array.
+        self.decimal = self.hex_convert()           # Class will always convert byte array to hexidecimal to decimal.   
 
-    def msg_check(self):
-        self.address = self.decimal[0]
+
+    def msg_check(self):                        # Checks the converted decimal array's CRC values
+                                            
+        self.address = self.decimal[0]  
         self.header = self.decimal[3]
 
-        if self.decimal[1] == 0:
+        if self.decimal[1] == 0:                    # Checks if message has data to convert
             self.length = 0
             self.data = None
         else:
             self.length = self.decimal[1]
-            self.data = self.decimal[4:4 + self.decimal[1]]
+            self.data = self.decimal[4 : 4 + self.decimal[1]]     # data starts at the 4th byte and count from 4 + length of data.
 
+                                                    # Extracted message parsed to ccTalk_msg.message() method 
+                                                    # to generate a calculated message
         self.message = ccTalk_msg(self.address, self.length, self.header, self.data).message()
-        
-        if self.message == self.decimal:
-            return(self.message)
-        else:
-            print('CRC check failed')
-            return
 
-    def hex_convert(self):
-        bite_array = list(self.msg.hex())
+        if self.message == self.decimal:            # Compares extracted message(.decimal) to calculated message(.message)
+            return(self.message)
+        else:                                       # If comparision fails, the extracted message is wrong 
+            print('CRC check failed')
+            return(1)
+
+
+    def hex_convert(self):                      # Conversion from byte array to hexidecimal list
+        bite_array = list(self.msg.hex())   
     
-        hex_array = []
-        array_count = 0
-        loop_count = int(len(bite_array)/2)
+        hex_array = []                              # Since the hexidecimal array is individual characters within a list
+        array_count = 0                             # they must be appended into pairs of hexidecimal bytes
+        loop_count = int(len(bite_array)/2) 
     
-        for bit in range(loop_count):
+        for bit in range(loop_count):               # This loop takes 2 bytes of the hexidecimal list and appends them into hex_array
             hex_array.append(bite_array[array_count] + bite_array[array_count+1])
             array_count += 2
     
-        dec_array = []
+        dec_array = []                              # Conversion from hexidecimal array to decimal array
         array_count = 0
         loop_count = int(len(hex_array))
 
-        for bit in range(loop_count):
+        for bit in range(loop_count):               # This loop takes the appended bytes from hex_array and applies decimal conversion
             dec_array.append(int(hex_array[array_count], 16))
             array_count += 1
 
-        return(dec_array)
+        return(dec_array)                           # Return the decimal converted byte array
 
-    def slave_msg_label(self):
-        header_types = {
+
+    def slave_msg_label(self):                  # Slave message identification
+        header_types = {                            # Dictionary of responses                  
         '[1, 0, 48, 0, 55]' : "ACK"
         }
-        string_convert = str(self.message)
-        
-        if string_convert != "1":
-            return(header_types.get(string_convert))
-        else:
-            return(": CRC check failed")
+        string_convert = str(self.decimal)          # String conversion for easier terminal readability
+        return(header_types.get(string_convert))
 
 
-class ccTalk_msg():
-    def __init__(self, address, length, header, data):
+class ccTalk_msg():                         # ccTalk message generator
+    '''
+    This class generates a ccTalk message in the form a decimal array,
+    the input data required is only the: address, length of data, header and data,
+    CRC is calculated within itself and will return the result in an array
+    '''
+    def __init__(self, address, length, header, data):  # Initialization
         self.address = address
-        self.length = length
+        self.length = length                        # Class global variables
         self.header = header
         
-        if data != None:
-            if self.length > 1:
+        if data != None:                            # Checking if data is present
+            if self.length > 1:                     # If there is more than 1 byte of data in the message
                 self.data = []
                 for bite in data:
-                    self.data.append(bite)
+                    self.data.append(bite)          # Individually append each data byte into a single message list
         
             else:
-                self.data = data
+                self.data = data                    # Append a single byte of data into the message list
         
         else:
-            self.data = data
+            self.data = data                        # Append datatype "None" into the global data variable
         
-        
-            
-    def message(self):
-        result = []
-        result.append(self.address)
+                   
+    def message(self):                          # Message generation
+        result = [] 
+        result.append(self.address)                 # Append global class variables into a message list array
         result.append(self.length)
         
-        crc_hex = self.crc_calculation()
+        crc_hex = self.crc_calculation()            # CRC calculation from global variables
         self.crc_lsb = int(crc_hex[1], 16)
         self.crc_msb = int(crc_hex[0], 16)
         
-        result.append(self.crc_lsb)
+        result.append(self.crc_lsb)                 # Each 'result.append' is in order of the ccTalk protocol
         result.append(self.header)
 
-        if self.data != None:
-            if self.length > 1:
-                for bite in self.data:
+        if self.data != None:                       # Checks if data is to be inserted in the message
+            if self.length > 1:                     # If data is great than 1 byte, it needs to be extraced out of the
+                for bite in self.data:              # generated data array and appended into message list array
                     result.append(bite)
         
-            elif self.length == 1:
-                result.append(self.data[0])
-
+            elif self.length == 1:                  # If data is a single byte append the single byte
+                result.append(self.data[0])         # into the message list array
+                                                    # If no data exists(None), do not append
         result.append(self.crc_msb)
             
-        return result
+        return result                               # Return generated message
 
-    def crc_calculation(self):
-        """
-        Calculates the CCITT checksum (CRC16) that can be used as a ccTalk
-        checksuming algorithm
-        """
-        if self.data == None:
+
+    def crc_calculation(self):                  # 16-bit CRC calculation
+        if self.data == None:                       # CRC calculation is dependant on if data is present or not
             array = [self.address, self.length, self.header]
-        else:
+        else:                                       # If data is present append the lists
             array = [self.address, self.length, self.header] + self.data
 
 
-        crc = 0x0000    # Initial CRC register
-        poly = 0x1021   # CRC polynomial
+        crc = 0x0000                                # Initial CRC register
+        poly = 0x1021                               # CRC polynomial
 
-        ##############*CRC Algorithm*########################
+        ##############*CRC Algorithm*######################## Black box of unknown
         for bite in array:                                  #
             crc ^= (bite << 8) & 0xffff                     #
             for j in range(0, 8):                           #
@@ -139,14 +147,15 @@ class ccTalk_msg():
                     crc &= 0xffff                           # 
         ##################################################### Result is in Decimal request Hex conversion        
         
-        hex = '{0:x}'.format(crc)       
-        hex_convert = list(hex)
+        hex = '{0:x}'.format(crc)                   # I assume hexidecimal formatting      
+        hex_convert = list(hex)                     # Place formatted data into a list
         crc_array = [hex_convert[0] + hex_convert[1], hex_convert[2] + hex_convert[3]] # [LSB, MSB] string clean up
         
-        return(crc_array)                                          
+        return(crc_array)                           # Return calculated CRC values                                          
 
-    def host_msg_label(self):
-        header_types = {
+
+    def host_msg_label(self):                   # Host message identificaion
+        header_types = {                            # Dictionary of responses
         255 : 'Factory set:up and test',
         254 : 'Simple poll',
         253 : 'Address poll',
@@ -308,43 +317,52 @@ class ccTalk_msg():
         return(header_types.get(self.header))
 
 
-class ccTalk_write():
-    def __init__(self, cmd):
+class ccTalk_write():                       # Master command label to decimal conversion
+    '''
+    This class generates ccTalk parameters from human commands.
+    Commands are currently implimented within the cmd_msg_label() method.
+    This class is implimented to make commands easier for the programmer.
+    '''
+    def __init__(self, cmd):                    # Initialization
         self.cmd = cmd
 
-    def command(self):
+    def command(self):                          # Generate message parameters from command label              
         self.parameters = self.cmd_msg_label()
         
-        if len(self.parameters) < 4:
+        if len(self.parameters) < 4:                # Check command message for the presence of data
             self.address = self.parameters[0]
             self.length = self.parameters[1]
             self.header = self.parameters[2]
-            self.data = None
+            self.data = None                        
         else:
             self.address = self.parameters[0]
             self.length = self.parameters[1]
             self.header = self.parameters[2]
-            self.data = self.parameters[3:]
-            
+            self.data = self.parameters[3:]         # Creates a specific array for data, which is extracted in .message()
+                                                    # Parses message parameters to generate ccTalk message
         host_msg = ccTalk_msg(self.address, self.length, self.header, self.data).message()
-        host_label = ccTalk_msg(self.address, self.length, self.header, self.data).host_msg_label()
-        val364.write(host_msg)
+                                                    # Cross checks message label from generated message
+        host_label = ccTalk_msg(self.address, self.length, self.header, self.data).host_msg_label() 
+        val364.write(host_msg)                      # Sends generated message from ccTalk_msg() class
         print("Sent message ", host_msg, host_label)
 
-        slave_msg_head = val364.read(4)
+        slave_msg_head = val364.read(4)             # Read the first 4 bytes of data from slave
         try:
-            slave_msg_tail = val364.read(slave_msg_head[1] + 1)
-            slave_msg_raw = slave_msg_head + slave_msg_tail
-            slave_msg = ccTalk_read(slave_msg_raw).msg_check()
-            slave_label = ccTalk_read(slave_msg_raw).slave_msg_label()
-            print("Recieved message", slave_msg, slave_label)
+            slave_msg_tail = val364.read(slave_msg_head[1] + 1) # Reads the remain bytes of data including the MSB CRC
+            slave_msg_raw = slave_msg_head + slave_msg_tail     # Combine the data arrays to get full ccTalk message
+            slave_msg = ccTalk_read(slave_msg_raw).msg_check()  # Cross checks the CRC to insure correct message was received
+            slave_label = ccTalk_read(slave_msg_raw).slave_msg_label()  # Cross checks message label from received message
+            print("Recieved message", slave_msg, slave_label) 
         except:
-            print(slave_msg_head, 'No response or an error occured')
-               
-    def cmd_msg_label(self):
+            print(slave_msg_head, 'No response or an error occured')    # If 'slave_msg'tail' fails,
+                                                                        # this means the device failed to respond
+                                                                        # most likely due to an error from the master message
+
+
+    def cmd_msg_label(self):                    # Master message identification
         command_types = {
-            'poll' : [55, 0, 254],
-            'enable' : [55, 1, 231, 255],
+            'poll' : [55, 0, 254],                  # Currently set for CX only(55), backplane is 240
+            'enable' : [55, 1, 231, 255],           # To be improved for device unification
             'request id' : [55, 0, 245],
             'gate' : [55, 1, 240, 1],
             'sorter 1' : [55, 2, 240, 0, 1]
