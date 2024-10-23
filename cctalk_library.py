@@ -2,6 +2,7 @@ import serial
 import time
 import csv
 #import numpy as np
+#import pandas as pd
 
 
 def comms(port, baud, timeout):             # Serial Communication with VAL364
@@ -12,7 +13,6 @@ def comms(port, baud, timeout):             # Serial Communication with VAL364
 
     except:
         print("Connection Error")
-        return(1)
 
 
 class ccTalk_read():                        # Checking slave data
@@ -359,7 +359,7 @@ class ccTalk_write():                       # Master command label to decimal co
             slave_msg_raw = slave_msg_head + slave_msg_tail     # Combine the data arrays to get full ccTalk message
             slave_msg = ccTalk_read(slave_msg_raw).msg_check()  # Cross checks the CRC to insure correct message was received
             slave_label = ccTalk_read(slave_msg_raw).slave_msg_label()  # Cross checks message label from received message
-            print("Recieved message", slave_label)
+            print("Recieved message", slave_msg, slave_label)
             return(slave_msg) 
         except:
             print('No response or an error occured')                    # If 'slave_msg'tail' fails,
@@ -377,70 +377,77 @@ class ccTalk_write():                       # Master command label to decimal co
             'dispense_d' : [240, 6, 97, 0, 0, 0, 1, 0, 0],
             'dispense_e' : [240, 6, 97, 0, 0, 0, 0, 1, 0],
             'request_adc' : [240, 1, 91, 12 ],
-            'read_adc': [240, 1, 90, 12]
+            'read_adc': [240, 1, 90, 12],
+            'read_bp_temp' : [240, 1, 91, 8]
         }
         return(command_types.get(self.cmd))
 
 
-class backplane_adc():
+class raw_adc():                            # Read and saves raw ADC values to CSV file
+    '''
+    This class requests ADC values from backplane,
+    converts bytes to integer/decimal format,
+    and writes formatted data to CSV file
+    '''
 
-    def __init__(self, flag, coins):
-        self.flag = flag
-        self.coins = coins
+    def __init__(self, start_flag, coin_count):     # Initialization
+        self.start_flag = start_flag                    # Flag for first loop
+        self.coin_count = coin_count                    # Coin count for total loops
         
-        ACK = [1, 0, 48, 0, 55]
+        ACK = [1, 0, 48, 0, 55]                         # Message Checking
         BUSY = [1, 0, 246, 6, 87]
-        #NAK = [1, 0, 149, 5, 103]
         
-        loop_flag = True
-        while loop_flag:
+                
+        loop_flag = True                                # Ensure the the request command was acknowledged
+        while loop_flag:                                # If NAK or BUSY then wait 1 second and try again
             time.sleep(1)
 
-            if ccTalk_write('request_adc').command() == ACK:
+            if ccTalk_write('request_adc').command() == ACK:    # Once ACK is recieved, quit loop
                 loop_flag = False
 
 
-        loop_flag = True   
-        while loop_flag:
+        loop_flag = True                                # Ensure that the read ADC values command was acknowledged   
+        while loop_flag:                                # If BUSY wait 1 second and try again
             time.sleep(1)
             check_adc_read = ccTalk_write('read_adc').command()
 
-            if check_adc_read != BUSY:
+            if check_adc_read != BUSY:                  # If NOT BUSY, store values sent from the CX, quit loop
                 self.adc_msg = check_adc_read
                 loop_flag = False    
                 
 
-        self.int_adc_array = self.bite_to_int()
+        self.int_adc_array = self.bite_to_int()         # Run the Class method that converts the data recieved from the CX
+                                                        # into usable data
 
 
-    def bite_to_int(self):
-        adc_list = self.adc_msg[5:-1]
+    def bite_to_int(self):                          # Converts Byte Array to Decimal Array
+        adc_list = self.adc_msg[5:-1]                   # Extracts the specific ADC data from the ccTalk message
         adc_array = []
         array_count = 0
         loop_count = int(len(adc_list)/2)
 
-        for bit in range(loop_count):
+        for bit in range(loop_count):                   # Appends the two bytes into a single Byte, E.g: 'AA', 'BB' to 'AABB'
             adc_array.append([adc_list[array_count], adc_list[array_count+1]])
             array_count += 2
         
         int_adc_array = []
 
-        for bite in adc_array:
+        for bite in adc_array:                          # Converts the each Byte to decimal by little order, E.g 'AABB' to 'BBAA'
             int_adc_array.append(int.from_bytes(bite, byteorder='little', signed=False))
         
         return(int_adc_array)
 
 
-    def request(self):
-        low_fields = ['Low Sensor A', 'Low Sensor B','Low Sensor C', 'Low Sensor D', 'Low Sensor E', 'Low Sensor F', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E', 'Coins F']
-        low_sensor = self.int_adc_array[0:6] + self.coins
+    def request(self):                              # Creates CSV file of raw ADC coil data
+        low_fields = ['Low Sensor A', 'Low Sensor B','Low Sensor C', 'Low Sensor D', 'Low Sensor E', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E']
+        low_sensor = self.int_adc_array[0:5] + self.coin_count  # data array of low sensors with coin count
         
 
-        mid_fields = ['Mid Sensor A', 'Mid Sensor B','Mid Sensor C', 'Mid Sensor D', 'Mid Sensor E', 'Mid Sensor F', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E', 'Coins F']
-        mid_sensor = self.int_adc_array[6:12] + self.coins
+        mid_fields = ['Mid Sensor A', 'Mid Sensor B','Mid Sensor C', 'Mid Sensor D', 'Mid Sensor E', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E']
+        mid_sensor = self.int_adc_array[6:11] + self.coin_count # data array of middle sensros with coin count
         
 
-        if self.flag == 0:
+        if self.start_flag == 0:                                # If first row, save coloumn fields + first data extraction
             filename = "low_sensor_data.csv"
             with open(filename, 'a', newline='') as csvfile:
                 csvwriter = csv.writer(csvfile)
@@ -453,7 +460,7 @@ class backplane_adc():
                 csvwriter.writerow(mid_fields)
                 csvwriter.writerow(mid_sensor)
 
-        else:
+        else:                                                   # If not first row, save data extraction only
             filename = "low_sensor_data.csv"
             with open(filename, 'a', newline='') as csvfile:
                 csvwriter = csv.writer(csvfile)
@@ -463,7 +470,244 @@ class backplane_adc():
             with open(filename, 'a', newline='') as csvfile:
                 csvwriter = csv.writer(csvfile)
                 csvwriter.writerow(mid_sensor)
+
+
+class compensate_adc():                     # Firmware specific parameter calculations for ADC compensation
+    '''
+    This class prepares the data for mathematical compensation of the ADC data.
+    It is used to emulate and accurately calculate the backplane ADC values for config creation.
+    '''
+
+    def __init__(self):                         # Initialization
+        temperature_msg = ccTalk_write('read_bp_temp').command()        # Extract the backplane temperature
+        temperature_data = 256*temperature_msg[5] + temperature_msg[4]  # convertion to 16bit value
+        temperature_value = float(temperature_data)/100                 # degrees celsius divide by 10 (firmware thing)
+        self.temperature = temperature_value
+    
+    
+    def free_air_temp_compensate(self):         # Free air temperature calculation
+        '''
+        Polynomial calculation
+        Y = AX^4 + BX^3 + CX^2 + DX + E
+        '''
+
+        # coil_sensors_task.c values
+        free_air_fact_a = 0.389669
+        free_air_fact_b = -1.082703
+        free_air_fact_c = 2.737358
+        free_air_fact_d = 8.759172
+        free_air_fact_e = -42.27787
+
+        free_temp_comp = ((free_air_fact_a * self.temperature) + free_air_fact_b) * self.temperature
+        free_temp_comp = (((free_temp_comp + free_air_fact_c) * self.temperature) + free_air_fact_d) * self.temperature
+        free_temp_comp = free_temp_comp + free_air_fact_e
+
+        return(free_temp_comp)
+
+
+    def temperature_compensate(self):           # Active inductive temperature calculation
+        '''
+        Polynomial calculation
+        Y = AX^4 + BX^3 + CX^2 + DX + E
+        '''
+
+        # MC1FactorySettings.xml values
+        inductive_temp_compensation_a = 0.73171967
+        inductive_temp_compensation_b = -5.89161115
+        inductive_temp_compensation_c = 25.6138176
+        inductive_temp_compensation_d = -50.6784931
+        inductive_temp_compensation_e = 29.9393305
+
+        normal_temp_comp = ((inductive_temp_compensation_a * self.temperature) + inductive_temp_compensation_b) * self.temperature
+        normal_temp_comp = (((normal_temp_comp + inductive_temp_compensation_c) * self.temperature) + inductive_temp_compensation_d) * self.temperature
+        normal_temp_comp = normal_temp_comp + inductive_temp_compensation_e
+
+        return(normal_temp_comp)
+
+
+    def free_air_adc(self):                     # Free air coil ADC extraction
+        filename = 'mid_sensor_data.csv'            # Middle sensor data is uninfluenced by coins when the cassette is empy
+        with open(filename, 'r') as file:
+            last_row = None
+
+            for last_row in csv.reader(file):       # Loop through the data within the CSV file
+                pass
+            
+            free_air = last_row[0:5]                # Last row of data is the equivalent of an empty cassette reading for fre air ADC
+            return(free_air)
+
+
+class adc_data_automation():                # Data automation for ADC collection
+    '''
+    This class encapsulates the functions, methods and loops
+    for the automation of extracting backplane data.
+
+    Keeps 'Main' clean.
+    '''
+
+    def __init__(self, coin_count):             # Initilization
+        self.coin_count = coin_count                # Coin count to track amount of loops to run
+                                                    
+        self.start_flag = 0                         # Flag for first loop
+        self.finish_flag = sum(self.coin_count)     # Flag for final loop, is tracking remaining coins from coin_count
         
+        self.nak = [1, 0, 149, 5, 103]              # Message checking
+
+
+    def collection(self):                       # Raw data collection
+        '''
+        This method is used to collect 
+        and extract raw ADC data from the CX backplane.
+
+        It will issue dispense commands until cassette is empty
+        and will record an ADC value each dispense.
+        '''
+        raw_adc(self.start_flag, self.coin_count).request()     # Initial data extraction
+        self.start_flag = 1                                     # Raise starting flag to prevent coloumn headers from being saved to CSV
+    
+        while self.finish_flag != 0:                            # Loop through coin count until coin count == 0
+            position = 0
+            for coin in self.coin_count:
+                if coin != 0:
+                    self.coin_count[position] = coin - 1 
+                position += 1                                   # Loop through array position, used for individual dispensing
+        
+
+            if ccTalk_write('dispense').command() == self.nak:  # Dispense all tubes until NAK (low tube counts)
+            
+                if self.coin_count[0] != 0:                     # Dispense tube A until tube count == 0
+                    ccTalk_write('dispense_a').command()
+                    print('tube a', self.coin_count[0])
+                    time.sleep(2)
+            
+                if self.coin_count[1] != 0:                     # Dispense tube B until tube count == 0           
+                    ccTalk_write('dispense_b').command()
+                    print('tube b', self.coin_count[1])
+                    time.sleep(2)
+            
+                if self.coin_count[2] != 0:                     # Dispense tube C until tube count == 0
+                    ccTalk_write('dispense_c').command()
+                    print('tube c', self.coin_count[2])
+                    time.sleep(2)
+            
+                if self.coin_count[3] != 0:                     # Dispense tube D until tube count == 0
+                    ccTalk_write('dispense_d').command()
+                    print('tube d', self.coin_count[3])
+                    time.sleep(2)
+            
+                if self.coin_count[4] != 0:                     # Dispense tube E until tube count == 0
+                    ccTalk_write('dispense_e').command()
+                    print('tube e', self.coin_count[4])
+                    time.sleep(2)
+        
+
+            raw_adc(self.start_flag, self.coin_count).request() # Save current loop's data and coin count
+            self.finish_flag = sum(self.coin_count)             # Check if coin count is 0
+
+    
+    def compensation(self):                     # Compensated data collection
+        '''
+        This method is used to calculate the compensated ADC values from raw data.
+
+        It generates all the data it needs within itself and from the CSV data generated
+        from the collection method.
+
+        It will collect free air data from the last row and iterate and resave calcuation into 
+        a second CSV file.
+        '''
+
+        self.free_air_temp = compensate_adc().free_air_temp_compensate()    # Extract temperature and calculate free air temp compensation
+        self.normal_air_temp = compensate_adc().temperature_compensate()    # Extract temperature and calculate active temp compensation
+        self.free_air_adc = compensate_adc().free_air_adc()                 # Extract and store free air ADC values
+        
+        # Middle sensor data compensation
+        filename = 'mid_sensor_data.csv'
+        with open(filename, 'r') as raw_data:       # Opens and read the raw CSV data file
+            line_count = 0                          # CSV row count
+            
+            for adc_data in csv.reader(raw_data):                           # If first row, save coloumn fields
+                if line_count == 0:
+                    filename = "mid_sensor_data_comp.csv"
+                    with open(filename, 'a', newline='') as comp_data:
+                        csvwriter = csv.writer(comp_data)
+                        csvwriter.writerow(adc_data)                        # The first row will be coloumn fields                 
+                        line_count += 1                                     # add one to CSV row
+
+                else:
+                    adc_data_array = []             # Create array for compensated ADC data
+                                     
+                    for position in range(10):      # Loop to iterate through data to append into data array
+                        if position < 5:            # Check if adc_data from raw csv file is ADC values NOT coin count
+                            try:
+                                normal_adc = float(adc_data[position])                  # Iterate through adc_data
+                                free_adc = float(self.free_air_adc[position])           # Iterate through the free-air array
+                            
+                                adc_calculation_1 = free_adc + self.free_air_temp       # Firmware calculations for compensation
+                                adc_calculation_2 = normal_adc + self.normal_air_temp
+                                compensated_adc = adc_calculation_1 - adc_calculation_2
+                            
+                                adc_data_array.append(compensated_adc)
+                            
+                            except:
+                                continue
+
+                        else:                       # Check is adc_data from raw csv file is coin count NOT ADC values
+                            adc_data_array.append(adc_data[position])                   # Iterate through adc_data
+
+                    filename = "mid_sensor_data_comp.csv"
+                    with open(filename, 'a', newline='') as comp_data:
+                        csvwriter = csv.writer(comp_data)
+                        csvwriter.writerow(adc_data_array)          # Save row of compensated data array to CSV file
+                        line_count += 1
+
+        # Lower sensor data compensation
+        filename = 'low_sensor_data.csv'
+        with open(filename, 'r') as raw_data:       # Opens and read the raw CSV data file         
+            line_count = 0                          # CSV row count
+            
+            for adc_data in csv.reader(raw_data):                           # If first row, save coloumn fields
+                if line_count == 0:
+                    filename = "low_sensor_data_comp.csv"
+                    with open(filename, 'a', newline='') as comp_data:
+                        csvwriter = csv.writer(comp_data)                   
+                        csvwriter.writerow(adc_data)                        # The first row will be coloumn fields
+                        line_count += 1                                     # add one to CSV row
+
+                else:
+                    adc_data_array = []             # Create array for compensated data
+                                     
+                    for position in range(10):      # Loop to iterate through data to append into data array
+                        if position < 5:            # Check if adc_data from raw CSV file is ADC values NOT coin count
+                            try:
+                                normal_adc = float(adc_data[position])                  # Iterate through adc_data
+                                free_adc = float(self.free_air_adc[position])           # Iterate through the free-air array
+                            
+                                adc_calculation_1 = free_adc + self.free_air_temp       # Firmware calculations for compensation
+                                adc_calculation_2 = normal_adc + self.normal_air_temp
+                                compensated_adc = adc_calculation_1 - adc_calculation_2
+                            
+                                adc_data_array.append(compensated_adc)
+                            
+                            except:
+                                continue
+
+                        else:                       # Check is adc_data from raw csv file is coin count NOT ADC values
+                            adc_data_array.append(adc_data[position])                   # Iterate through adc_data
+
+                    filename = "low_sensor_data_comp.csv"
+                    with open(filename, 'a', newline='') as comp_data:
+                        csvwriter = csv.writer(comp_data)
+                        csvwriter.writerow(adc_data_array)          # Save row of compensated data array to CSV file
+                        line_count += 1                    
+
+                        
+
+
+                        
+
+
+
+
 
 
 if __name__ == "__main__":
@@ -472,51 +716,28 @@ if __name__ == "__main__":
     baud_rate = 57600
     timeout = 2
 
-    #coin_count=[77, 76, 85, 108, 78, 0]               #Euro Cassette, filled cassette except for tube B
-    coin_count = [0, 0, 103, 0, 103]              #Thailand Cassette
-    
-    start_flag = 0
-    finish_flag = sum(coin_count)
-    NAK = [1, 0, 149, 5, 103]
-    nak_count = 0
 
+    # Manually counted cassette coin levels. Tube F is not used.
+    #          [ A,  B,  C,  D,  E]
+    coin_count=[77, 76, 85, 108, 78]   # Enter coin counts here (Currrently EURO)
+    
+    #coin_count = [86, 133, 96, 133, 96]        # Thai coins used for Testing
+       
+    
 
     # Main code
-    val364 = comms(com_port, baud_rate, timeout)
     
-    backplane_adc(start_flag, coin_count).request()
-    start_flag = 1
+    val364 = comms(com_port, baud_rate, timeout)    
+
+    '''
+    ADC coil data collection.
     
-    while finish_flag != 0:
-        position = 0
-        for coin in coin_count:
-            if coin != 0:
-                coin_count[position] = coin - 1
-            position += 1
-        
-        if ccTalk_write('dispense').command() == NAK:
-            
-            tube_a = ccTalk_write('dispense_a').command()
-            print('tube a')
-            time.sleep(2)
-            tube_b = ccTalk_write('dispense_b').command()
-            print('tube b')
-            time.sleep(2)
-            tube_c = ccTalk_write('dispense_c').command()
-            print('tube c')
-            time.sleep(2)
-            tube_d = ccTalk_write('dispense_d').command()
-            print('tube d')
-            time.sleep(2)
-            tube_e = ccTalk_write('dispense_e').command()
-            print('tube e')
-            time.sleep(2)
+    Compensated data requires both action 1 & 2
+    However if raw data is only required comment out 'action_2' with #
+    '''
 
-        
-        backplane_adc(start_flag, coin_count).request()
-        
-        finish_flag = sum(coin_count)
-    
-
-
+    auto = adc_data_automation(coin_count)
+    action_1 = auto.collection()        # Raw ADC data collection
+    action_2 = auto.compensation()      # Compensated ADC data collection
+     
     
