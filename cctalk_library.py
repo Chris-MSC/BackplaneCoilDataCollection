@@ -1,4 +1,7 @@
 import serial
+import time
+import csv
+#import numpy as np
 
 
 def comms(port, baud, timeout):             # Serial Communication with VAL364
@@ -71,7 +74,9 @@ class ccTalk_read():                        # Checking slave data
 
     def slave_msg_label(self):                  # Slave message identification
         header_types = {                            # Dictionary of responses                  
-        '[1, 0, 48, 0, 55]' : "ACK"
+        '[1, 0, 48, 0, 55]' : "ACK",
+        '[1, 0, 149, 5, 103]' : "NAK",
+        '[1, 0, 246, 6, 87]' : "BUSY"
         }
         string_convert = str(self.decimal)          # String conversion for easier terminal readability
         return(header_types.get(string_convert))
@@ -148,6 +153,7 @@ class ccTalk_msg():                         # ccTalk message generator
         ##################################################### Result is in Decimal request Hex conversion        
         
         hex = '{0:x}'.format(crc)                   # I assume hexidecimal formatting      
+        hex = (4 - len(hex)) * '0' + hex
         hex_convert = list(hex)                     # Place formatted data into a list
         crc_array = [hex_convert[0] + hex_convert[1], hex_convert[2] + hex_convert[3]] # [LSB, MSB] string clean up
         
@@ -326,6 +332,7 @@ class ccTalk_write():                       # Master command label to decimal co
     def __init__(self, cmd):                    # Initialization
         self.cmd = cmd
 
+
     def command(self):                          # Generate message parameters from command label              
         self.parameters = self.cmd_msg_label()
         
@@ -352,22 +359,111 @@ class ccTalk_write():                       # Master command label to decimal co
             slave_msg_raw = slave_msg_head + slave_msg_tail     # Combine the data arrays to get full ccTalk message
             slave_msg = ccTalk_read(slave_msg_raw).msg_check()  # Cross checks the CRC to insure correct message was received
             slave_label = ccTalk_read(slave_msg_raw).slave_msg_label()  # Cross checks message label from received message
-            print("Recieved message", slave_msg, slave_label) 
+            print("Recieved message", slave_label)
+            return(slave_msg) 
         except:
-            print(slave_msg_head, 'No response or an error occured')    # If 'slave_msg'tail' fails,
-                                                                        # this means the device failed to respond
+            print('No response or an error occured')                    # If 'slave_msg'tail' fails,
+            return(slave_msg_head)                                      # this means the device failed to respond
                                                                         # most likely due to an error from the master message
 
 
     def cmd_msg_label(self):                    # Master message identification
         command_types = {
             'poll' : [55, 0, 254],                  # Currently set for CX only(55), backplane is 240
-            'enable' : [55, 1, 231, 255],           # To be improved for device unification
-            'request id' : [55, 0, 245],
-            'gate' : [55, 1, 240, 1],
-            'sorter 1' : [55, 2, 240, 0, 1]
+            'dispense' : [240, 6, 97, 1, 1, 1, 1, 1, 0],
+            'dispense_a' : [240, 6, 97, 1, 0, 0, 0, 0, 0],
+            'dispense_b' : [240, 6, 97, 0, 1, 0, 0, 0, 0],
+            'dispense_c' : [240, 6, 97, 0, 0, 1, 0, 0, 0],
+            'dispense_d' : [240, 6, 97, 0, 0, 0, 1, 0, 0],
+            'dispense_e' : [240, 6, 97, 0, 0, 0, 0, 1, 0],
+            'request_adc' : [240, 1, 91, 12 ],
+            'read_adc': [240, 1, 90, 12]
         }
         return(command_types.get(self.cmd))
+
+
+class backplane_adc():
+
+    def __init__(self, flag, coins):
+        self.flag = flag
+        self.coins = coins
+        
+        ACK = [1, 0, 48, 0, 55]
+        BUSY = [1, 0, 246, 6, 87]
+        #NAK = [1, 0, 149, 5, 103]
+        
+        loop_flag = True
+        while loop_flag:
+            time.sleep(1)
+
+            if ccTalk_write('request_adc').command() == ACK:
+                loop_flag = False
+
+
+        loop_flag = True   
+        while loop_flag:
+            time.sleep(1)
+            check_adc_read = ccTalk_write('read_adc').command()
+
+            if check_adc_read != BUSY:
+                self.adc_msg = check_adc_read
+                loop_flag = False    
+                
+
+        self.int_adc_array = self.bite_to_int()
+
+
+    def bite_to_int(self):
+        adc_list = self.adc_msg[5:-1]
+        adc_array = []
+        array_count = 0
+        loop_count = int(len(adc_list)/2)
+
+        for bit in range(loop_count):
+            adc_array.append([adc_list[array_count], adc_list[array_count+1]])
+            array_count += 2
+        
+        int_adc_array = []
+
+        for bite in adc_array:
+            int_adc_array.append(int.from_bytes(bite, byteorder='little', signed=False))
+        
+        return(int_adc_array)
+
+
+    def request(self):
+        low_fields = ['Low Sensor A', 'Low Sensor B','Low Sensor C', 'Low Sensor D', 'Low Sensor E', 'Low Sensor F', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E', 'Coins F']
+        low_sensor = self.int_adc_array[0:6] + self.coins
+        
+
+        mid_fields = ['Mid Sensor A', 'Mid Sensor B','Mid Sensor C', 'Mid Sensor D', 'Mid Sensor E', 'Mid Sensor F', 'Coins A', 'Coins B', 'Coins C', 'Coins D', 'Coins E', 'Coins F']
+        mid_sensor = self.int_adc_array[6:12] + self.coins
+        
+
+        if self.flag == 0:
+            filename = "low_sensor_data.csv"
+            with open(filename, 'a', newline='') as csvfile:
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow(low_fields)
+                csvwriter.writerow(low_sensor)
+
+            filename = "mid_sensor_data.csv"
+            with open(filename, 'a', newline='') as csvfile:
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow(mid_fields)
+                csvwriter.writerow(mid_sensor)
+
+        else:
+            filename = "low_sensor_data.csv"
+            with open(filename, 'a', newline='') as csvfile:
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow(low_sensor)
+
+            filename = "mid_sensor_data.csv"
+            with open(filename, 'a', newline='') as csvfile:
+                csvwriter = csv.writer(csvfile)
+                csvwriter.writerow(mid_sensor)
+        
 
 
 if __name__ == "__main__":
@@ -375,11 +471,52 @@ if __name__ == "__main__":
     com_port = "COM3"
     baud_rate = 57600
     timeout = 2
+
+    #coin_count=[77, 76, 85, 108, 78, 0]               #Euro Cassette, filled cassette except for tube B
+    coin_count = [0, 0, 103, 0, 103]              #Thailand Cassette
     
+    start_flag = 0
+    finish_flag = sum(coin_count)
+    NAK = [1, 0, 149, 5, 103]
+    nak_count = 0
+
+
     # Main code
     val364 = comms(com_port, baud_rate, timeout)
     
-    ccTalk_write('poll').command()
-    ccTalk_write('enable').command()
-    ccTalk_write('request id').command()
-    ccTalk_write('gate').command()
+    backplane_adc(start_flag, coin_count).request()
+    start_flag = 1
+    
+    while finish_flag != 0:
+        position = 0
+        for coin in coin_count:
+            if coin != 0:
+                coin_count[position] = coin - 1
+            position += 1
+        
+        if ccTalk_write('dispense').command() == NAK:
+            
+            tube_a = ccTalk_write('dispense_a').command()
+            print('tube a')
+            time.sleep(2)
+            tube_b = ccTalk_write('dispense_b').command()
+            print('tube b')
+            time.sleep(2)
+            tube_c = ccTalk_write('dispense_c').command()
+            print('tube c')
+            time.sleep(2)
+            tube_d = ccTalk_write('dispense_d').command()
+            print('tube d')
+            time.sleep(2)
+            tube_e = ccTalk_write('dispense_e').command()
+            print('tube e')
+            time.sleep(2)
+
+        
+        backplane_adc(start_flag, coin_count).request()
+        
+        finish_flag = sum(coin_count)
+    
+
+
+    
