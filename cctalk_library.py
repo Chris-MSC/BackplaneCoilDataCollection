@@ -1,6 +1,8 @@
+import sys
 import serial
 import time
 import csv
+import PySimpleGUI as sg
 #import numpy as np
 #import pandas as pd
 
@@ -14,6 +16,77 @@ def comms(port, baud, timeout):             # Serial Communication with VAL364
     except:
         print("Connection Error")
 
+def com_window():
+    gui_flag = True
+    sg.theme('DarkAmber')
+    layout = [  [sg.Text('COM port parameters')],
+                [sg.Text('Enter COM port number:'), sg.InputText()],
+                [sg.Button('Next'), sg.Button('Exit')] ]
+    
+    window = sg.Window('CX Backplane Data Collection', layout)
+
+    while gui_flag:
+        event, values = window.read()
+        if event == sg.WIN_CLOSED or event == 'Exit':
+            exit()
+        
+        elif event == 'Next':
+            com_port = values[0]
+            gui_flag = False
+            window.close()
+
+        else:
+            continue
+
+    return(com_port)
+
+def tube_window(): 
+    coin_count = []   
+    
+    gui_flag = True
+    sg.theme('DarkAmber')
+    layout = [  [sg.Text('Collected data will be located in the Users directory on the C drive')],
+                [sg.Text('Enter Tube A value:'), sg.InputText()],
+                [sg.Text('Enter Tube B value:'), sg.InputText()],
+                [sg.Text('Enter Tube C value:'), sg.InputText()],
+                [sg.Text('Enter Tube D value:'), sg.InputText()],
+                [sg.Text('Enter Tube E value:'), sg.InputText()],
+                [sg.Button('Start'), sg.Button('Exit')] ]
+    
+    window = sg.Window('CX Backplane Data Collection', layout)
+
+    while gui_flag:
+        event, values = window.read()
+        if event == sg.WIN_CLOSED or event == 'Exit':
+            exit()
+        
+        elif event == 'Start':
+            for value in values:
+                coin_count.append(int(values[value]))
+            
+            gui_flag = False
+            window.close()
+
+        else:
+            continue
+
+    return(coin_count)
+
+
+    gui_flag = True
+    sg.theme('DarkAmber')
+    layout = [  [sg.Text('Remaing Coins In Tube')],
+                [sg.Text('Tube A: ' + str(coin_count[0]))],
+                [sg.Text('Tube B: ' + str(coin_count[1]))],
+                [sg.Text('Tube C: ' + str(coin_count[2]))],
+                [sg.Text('Tube D: ' + str(coin_count[3]))],
+                [sg.Text('Tube E: ' + str(coin_count[4]))],
+                [sg.Button('Stop')] ]
+    
+    window = sg.Window('CX Backplane Data Collection', layout)
+
+    window.read(close = True)
+    
 
 class ccTalk_read():                        # Checking slave data
     '''
@@ -351,7 +424,7 @@ class ccTalk_write():                       # Master command label to decimal co
                                                     # Cross checks message label from generated message
         host_label = ccTalk_msg(self.address, self.length, self.header, self.data).host_msg_label() 
         val364.write(host_msg)                      # Sends generated message from ccTalk_msg() class
-        print("Sent message ", host_msg, host_label)
+        #print("Sent message ", host_msg, host_label)
 
         slave_msg_head = val364.read(4)             # Read the first 4 bytes of data from slave
         try:
@@ -359,7 +432,7 @@ class ccTalk_write():                       # Master command label to decimal co
             slave_msg_raw = slave_msg_head + slave_msg_tail     # Combine the data arrays to get full ccTalk message
             slave_msg = ccTalk_read(slave_msg_raw).msg_check()  # Cross checks the CRC to insure correct message was received
             slave_label = ccTalk_read(slave_msg_raw).slave_msg_label()  # Cross checks message label from received message
-            print("Recieved message", slave_msg, slave_label)
+            #print("Recieved message", slave_msg, slave_label)
             return(slave_msg) 
         except:
             print('No response or an error occured')                    # If 'slave_msg'tail' fails,
@@ -571,35 +644,39 @@ class adc_data_automation():                # Data automation for ADC collection
                 if coin != 0:
                     self.coin_count[position] = coin - 1 
                 position += 1                                   # Loop through array position, used for individual dispensing
-        
 
             if ccTalk_write('dispense').command() == self.nak:  # Dispense all tubes until NAK (low tube counts)
             
                 if self.coin_count[0] != 0:                     # Dispense tube A until tube count == 0
                     ccTalk_write('dispense_a').command()
-                    print('tube a', self.coin_count[0])
+                    print('')
+                    print('tube A', self.coin_count[0])
                     time.sleep(2)
             
                 if self.coin_count[1] != 0:                     # Dispense tube B until tube count == 0           
                     ccTalk_write('dispense_b').command()
-                    print('tube b', self.coin_count[1])
+                    print('tube B', self.coin_count[1])
                     time.sleep(2)
             
                 if self.coin_count[2] != 0:                     # Dispense tube C until tube count == 0
                     ccTalk_write('dispense_c').command()
-                    print('tube c', self.coin_count[2])
+                    print('tube C', self.coin_count[2])
                     time.sleep(2)
             
                 if self.coin_count[3] != 0:                     # Dispense tube D until tube count == 0
                     ccTalk_write('dispense_d').command()
-                    print('tube d', self.coin_count[3])
+                    print('tube D', self.coin_count[3])
                     time.sleep(2)
             
                 if self.coin_count[4] != 0:                     # Dispense tube E until tube count == 0
                     ccTalk_write('dispense_e').command()
-                    print('tube e', self.coin_count[4])
+                    print('tube E', self.coin_count[4])
                     time.sleep(2)
-        
+
+            else:
+                print('')
+                print('A B C D E')
+                print(self.coin_count)
 
             raw_adc(self.start_flag, self.coin_count).request() # Save current loop's data and coin count
             self.finish_flag = sum(self.coin_count)             # Check if coin count is 0
@@ -712,23 +789,15 @@ class adc_data_automation():                # Data automation for ADC collection
 
 if __name__ == "__main__":
     # Serial Communication Parameters
-    com_port = "COM3"
+    com_port = "COM" + com_window()
     baud_rate = 57600
     timeout = 2
 
+    val364 = comms(com_port, baud_rate, timeout)
 
-    # Manually counted cassette coin levels. Tube F is not used.
-    #          [ A,  B,  C,  D,  E]
-    coin_count=[77, 76, 85, 108, 78]   # Enter coin counts here (Currrently EURO)
-    
-    #coin_count = [86, 133, 96, 133, 96]        # Thai coins used for Testing
-       
-    
+    coin_count = tube_window()
 
-    # Main code
-    
-    val364 = comms(com_port, baud_rate, timeout)    
-
+    # Main code    
     '''
     ADC coil data collection.
     
@@ -738,6 +807,24 @@ if __name__ == "__main__":
 
     auto = adc_data_automation(coin_count)
     action_1 = auto.collection()        # Raw ADC data collection
-    action_2 = auto.compensation()      # Compensated ADC data collection
+    action_2 = auto.compensation()      # Compensated ADC data collection     
+
+
+            
+
+    
+            
+        
+        
+
+
+
+
+
+
+
+
+
+    
      
     
